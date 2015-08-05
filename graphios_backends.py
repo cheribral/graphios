@@ -542,11 +542,11 @@ class influxdb(object):
         for i in xrange(0, len(l), n):
             yield l[i:i+n]
 
-    def _send(self, server, chunk):
+    def _send(self, server, body, json=False):
         self.log.debug("Connecting to InfluxDB at %s" % server)
-        json_body = json.dumps(chunk)
-        req = urllib2.Request(self.build_url(server), json_body)
-        req.add_header('Content-Type', 'application/json')
+        req = urllib2.Request(self.build_url(server), body)
+        if json:
+            req.add_header('Content-Type', 'application/json')
 
         try:
             r = urllib2.urlopen(req, timeout=self.timeout)
@@ -600,7 +600,7 @@ class influxdb(object):
         series_chunks = self.chunks(series, self.influxdb_max_metrics)
         for chunk in series_chunks:
             for s in self.influxdb_servers:
-                if not self._send(s, chunk):
+                if not self._send(s, json.dumps(chunk), json=True):
                     ret = 0
 
         return ret
@@ -625,7 +625,8 @@ class influxdb09(influxdb):
         if len(test_port) < 2:
             server = "%s:%i" % (server, self.default_ports[self.scheme])
 
-        return "%s://%s/write?u=%s&p=%s" % (self.scheme, server,
+        return "%s://%s/write?db=%s&u=%s&p=%s&precision=s" % (self.scheme, server,
+                                            self.influxdb_db,
                                             self.influxdb_user,
                                             self.influxdb_password)
 
@@ -637,33 +638,29 @@ class influxdb09(influxdb):
             ret += 1
 
             if (m.SERVICEDESC == ''):
-                path = m.HOSTCHECKCOMMAND
+                name = m.HOSTCHECKCOMMAND
             else:
-                path = m.SERVICEDESC
+                name = m.SERVICEDESC
 
-            # Ensure a int/float gets passed
-            try:
-                value = int(m.VALUE)
-            except ValueError:
-                try:
-                    value = float(m.VALUE)
-                except ValueError:
-                    value = 0
+            # Ensure a float gets passed using very tricky mathematics
+            if m.VALUE.find('.') < 0:
+                value = m.VALUE + '.0'
+            elif m.VALUE.find('-') > 0:
+                value = '0.0'
+            else:
+                value = m.VALUE
 
-            tags = {"check": m.LABEL, "host": m.HOSTNAME}
-            tags.update(self.influxdb_extra_tags)
+            tags = "check=%s,host=%s" % (m.LABEL, m.HOSTNAME)
+            for k,v in self.influxdb_extra_tags.items():
+                tags += ",%s=%s" % (k,v)
 
-            perfdata.append({
-                            "timestamp": int(m.TIMET),
-                            "name": path,
-                            "tags": tags,
-                            "fields": {"value": value}})
+            measurement = "%s,%s value=%s %s" % (name,  tags, value, int(m.TIMET))
+            perfdata.append(measurement)
 
         series_chunks = self.chunks(perfdata, self.influxdb_max_metrics)
         for chunk in series_chunks:
-            series = {"database": self.influxdb_db, "points": chunk}
             for s in self.influxdb_servers:
-                if not self._send(s, series):
+                if not self._send(s, '\n'.join(chunk)):
                     ret = 0
 
         return ret
