@@ -634,6 +634,7 @@ class influxdb09(influxdb):
         """ Connect to influxdb and send metrics """
         ret = 0
         perfdata = []
+        tags = {}
         for m in metrics:
             ret += 1
 
@@ -642,19 +643,20 @@ class influxdb09(influxdb):
             else:
                 name = m.SERVICEDESC
 
-            # Ensure a float gets passed using very tricky mathematics
-            if m.VALUE.find('.') < 0:
-                value = m.VALUE + '.0'
-            elif m.VALUE.find('-') > 0:
-                value = '0.0'
-            else:
+            # Influx will assume everthing as a float
+            if m.VALUE != '':
                 value = m.VALUE
+            else:
+                value = 0
 
-            tags = "check=%s,host=%s" % (m.LABEL, m.HOSTNAME)
-            for k,v in self.influxdb_extra_tags.items():
-                tags += ",%s=%s" % (k,v)
+            tags['check'] = m.LABEL
+            tags['host'] = m.HOSTNAME
+            tags.update(self.influxdb_extra_tags)
+            measurement = name
+            for k in sorted(tags.iterkeys()):
+                measurement += ",%s=%s" % (k,tags[k])
 
-            measurement = "%s,%s value=%s %s" % (name,  tags, value, int(m.TIMET))
+            measurement += " value=%s %s" % (value, int(m.TIMET))
             perfdata.append(measurement)
 
         series_chunks = self.chunks(perfdata, self.influxdb_max_metrics)
